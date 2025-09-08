@@ -7,11 +7,11 @@ from collections import Counter
 from itertools import product
 import pandas as pd, numpy as np
 import torch, torch.nn as nn
+from spacy.ml.parser_model import best
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report, confusion_matrix
 
-# ───── Config griglia (≈ 7 h) ─────────────────────────────────────────
 param_grid = list(product(
     [16, 32, 64],      # emb_dim
     [64, 128, 256],          # num_filters
@@ -21,7 +21,6 @@ param_grid = list(product(
     [64, 128, 256],         # batch_size
     [1e-3, 5e-4]                  # lr
 ))
-# ───── Variabili globali ──────────────────────────────────────────────
 DEVICE = torch.device("mps" if torch.backends.mps.is_available()
                       else "cuda" if torch.cuda.is_available()
                       else "cpu")
@@ -29,7 +28,7 @@ MAX_EPOCH = 50
 PATIENCE  = 10
 LOG_FILE  = "grid_log.csv"
 BEST_CKPT = "best_charcnn_grid.pt"
-# ───── Helper testo → char‑ids ────────────────────────────────────────
+
 def clean(t): return re.sub(r"\s+", " ", html.unescape(t.lower())).strip()
 def tokens(t): return list(t)
 def build_vocab(texts, min_freq=1):
@@ -47,7 +46,7 @@ class TweetSet(Dataset):
         self.labels=torch.tensor(labels)
     def __len__(s): return len(s.labels)
     def __getitem__(s,i): return (torch.tensor(s.inputs[i]), s.labels[i])
-# ───── Model ──────────────────────────────────────────────────────────
+
 class CharCNN(nn.Module):
     def __init__(self,vocab_sz,emb,kernel,num_filt,drop):
         super().__init__()
@@ -60,7 +59,7 @@ class CharCNN(nn.Module):
         x=[torch.relu(c(x)) for c in self.convs]
         x=[torch.max(c,2).values for c in x]
         return self.fc(self.drop(torch.cat(x,1)))
-# ───── Load data una sola volta ───────────────────────────────────────
+
 train=pd.read_csv("files/train.csv",sep=";")
 val  =pd.read_csv("files/validation.csv",sep=";")
 test =pd.read_csv("files/test.csv",sep=";")
@@ -72,7 +71,7 @@ yte=le.transform(test["account.type"])
 vocab=build_vocab(train["clean"])
 print("Vocab size:", len(vocab))
 
-# ───── Ripristina log se esiste ───────────────────────────────────────
+
 done_runs=set()
 best_val=0.0
 if os.path.isfile(LOG_FILE):
@@ -89,7 +88,7 @@ else:
         writer=csv.DictWriter(f,fieldnames=["params","val_acc"])
         writer.writeheader()
 
-# ───── Grid‑loop ──────────────────────────────────────────────────────
+
 for comb in param_grid:
     if comb in done_runs: continue   # skip
     emb,num_filt,kernel,drop,max_len,bs,lr = comb
@@ -112,7 +111,7 @@ for comb in param_grid:
             ids,lbl=ids.to(DEVICE),lbl.to(DEVICE)
             opt.zero_grad(); loss=crit(model(ids),lbl)
             loss.backward(); opt.step()
-        # val
+
         model.eval(); corr=tot=0
         with torch.no_grad():
             for ids,lbl in va_ld:
@@ -128,14 +127,12 @@ for comb in param_grid:
             wait+=1
             if wait>=PATIENCE: break
 
-    # logga questo run appena finito
     with open(LOG_FILE,"a",newline="") as f:
         csv.DictWriter(f,fieldnames=["params","val_acc"]).writerow(
             {"params":repr(comb),"val_acc":f"{best_run:.4f}"})
     done_runs.add(comb)
     print(f"   best_val_acc_run={best_run:.4f} | global_best={best_val:.4f}")
 
-# ───── Test finale con checkpoint migliore ───────────────────────────
 best_emb,best_filt,best_k,best_drop,best_len,best_bs,best_lr = best(
     [eval(r["params"]) for r in csv.DictReader(open(LOG_FILE))],
     key=lambda p: float([r["val_acc"] for r in csv.DictReader(open(LOG_FILE))
@@ -144,7 +141,6 @@ print("\n🏁 Grid search terminata.")
 print("Migliori parametri:", best_emb,best_filt,best_k,best_drop,best_len,best_bs,best_lr)
 print("Miglior val_acc:", best_val)
 
-# Test set
 te_ds = TweetSet(test["clean"], yte, vocab, best_len)
 te_ld = DataLoader(te_ds, batch_size=best_bs)
 model = CharCNN(len(vocab), best_emb, best_k, best_filt, best_drop).to(DEVICE)

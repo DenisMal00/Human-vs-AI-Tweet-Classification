@@ -22,7 +22,6 @@ def repetition_ratio(text):
     unique = len(set(words))
     return 1 - (unique / total)
 
-# Funzione per estrarre feature extra
 def extract_features(df, text_col='text'):
     df = df.copy()
     df['has_url'] = df[text_col].str.contains(r'http\S+', regex=True).astype(int)
@@ -37,12 +36,10 @@ def extract_features(df, text_col='text'):
 
     return df
 
-# Carica i dati
 train_df = pd.read_csv('files/train_clean.csv', sep=';', quotechar='"', engine='python')
 val_df = pd.read_csv('files/validation_clean.csv', sep=';', quotechar='"', engine='python')
 test_df = pd.read_csv('files/test_clean.csv', sep=';', quotechar='"', engine='python')
 
-# Pulisci i NaN
 for df in [train_df, val_df, test_df]:
     df['text'] = df['text'].fillna("")
 
@@ -55,12 +52,12 @@ def lemmatize_text(text):
     doc = nlp(text)
     return " ".join([token.lemma_ for token in doc if not token.is_punct and not token.is_space])
 
-MENTION_RE = re.compile(r"@\w{1,15}")    # handle ≤15 caratteri
+MENTION_RE = re.compile(r"@\w{1,15}")
 URL_RE = re.compile(
-    r"""(?xi)          # verbose, ignore‑case
+    r"""(?xi)         
     \b
-    (?:https?://|www\.)           # schema
-    [\w._~:/?#\[\]@!$&'()*+,;=%-]+  # path/query ecc.  ➜  il '-' è l'ultimo
+    (?:https?://|www\.)           
+    [\w._~:/?#\[\]@!$&'()*+,;=%-]+ 
     """
 )
 def clean_text_base(text: str) -> str:
@@ -68,74 +65,59 @@ def clean_text_base(text: str) -> str:
     if not isinstance(text, str):
         return ""
 
-    # dopo html.unescape(...)
     text = re.sub(r'&?gt;?', '>', text)  # &gt , &gt; , gt -> >
     text = re.sub(r'&amp;gt;?', '>', text)  # &amp;gt , &amp;gt; -> >
-    # sostituisci 'src' (isolato o seguito da =) con token speciale
     text = re.sub(r'\bsrc\b=?', '__src_tag__', text)
 
     text = html.unescape(text.lower())
 
-    # 1) URL → __url__
     text = URL_RE.sub("__url__", text)
 
-    # 2) Qualunque @handle → __user_mention__
-    #    La regex MENTION_RE cattura @ seguito da 1‑15 char (standard Twitter)
+
     text = MENTION_RE.sub("__user_mention__", text)
 
-    # 3) Rimuovi solo il simbolo # ma preserva la parola
     text = text.replace("#", "")
 
-    # 4) comprimi spazi multipli
     text = re.sub(r"\\s+", " ", text).strip()
 
     return text
 
-# esempio con i DataFrame già caricati: train_df, val_df, test_df
 for df in [train_df, val_df, test_df]:
     df['text_clean'] = df['text'].apply(clean_text_base)
 
 
 
-# Estrai feature extra
 train_df = extract_features(train_df)
 val_df = extract_features(val_df)
 test_df = extract_features(test_df)
 
-# TF-IDF
 vectorizer = TfidfVectorizer(max_features=25000, ngram_range=(1, 3),sublinear_tf=True)
 X_train_tfidf = vectorizer.fit_transform(train_df['text_clean'])
 X_val_tfidf = vectorizer.transform(val_df['text_clean'])
 X_test_tfidf = vectorizer.transform(test_df['text_clean'])
 
-# Feature extra da aggiungere (colonne numeriche)
 extra_features = [ 'has_mention','has_url', 'has_hashtag']
 X_train_extra = train_df[extra_features].values
 X_val_extra = val_df[extra_features].values
 X_test_extra = test_df[extra_features].values
 
-# Concatena TF-IDF + extra features
 X_train_final = hstack([X_train_tfidf, X_train_extra])
 X_val_final = hstack([X_val_tfidf, X_val_extra])
 X_test_final = hstack([X_test_tfidf, X_test_extra])
 
-# Target
 y_train = train_df['account.type']
 y_val = val_df['account.type']
 y_test = test_df['account.type']
 
-# Modello SVM
 clf = LinearSVC(C=1)
 clf.fit(X_train_final, y_train)
 
-# Validazione
 y_val_pred = clf.predict(X_val_final)
 print("\n📊 Classification Report (Validation):\n")
 print(classification_report(y_val, y_val_pred))
 print("📉 Confusion Matrix (Validation):\n")
 print(confusion_matrix(y_val, y_val_pred))
 
-# Test
 y_test_pred = clf.predict(X_test_final)
 print("\n🧪 Classification Report (Test):\n")
 print(classification_report(y_test, y_test_pred))
@@ -186,10 +168,8 @@ plt.figure(figsize=(6,4))
 plt.barh(feat_names[bot_idx], coef[bot_idx], color='blue')
 plt.title(f'Top {N} HUMAN‑driving features'); plt.show()
 
-'''
-# ================================================================
-#      S V M  ‑  T W E E T     E X P L O R E R
-# ================================================================
+
+
 import numpy as np, pandas as pd, re
 
 # -------- PARAMETRI PRINCIPALI ----------------------------------
@@ -426,64 +406,4 @@ for t in fp: print("•", t[:120], "…")
 print("\n≈≈≈  FALSE NEGATIVES (sample)  ≈≈≈")
 for t in fn: print("•", t[:120], "…")
 
-
-# -------------------------------------------------------------
-#  ACCURACY PER CATEGORIA (GPT‑2, RNN, others …)
-# -------------------------------------------------------------
-import seaborn as sns, matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
-
-############################################################################
-# 1)  NOMI COLONNE  – (modifica se i tuoi CSV usano nomi diversi)
-############################################################################
-TECH_COL   = "class_type"      # es. "bot_family"   ("gpt2", "rnn", "others"…)
-LABEL_COL  = "account.type"    # rimane "bot"/"human"
-
-# verifica
-for c in (TECH_COL, LABEL_COL):
-    if c not in test_df.columns:
-        raise ValueError(f"Colonna '{c}' non trovata in test_df!")
-
-############################################################################
-# 2)  DataFrame con predizione e correttezza
-############################################################################
-res = test_df[[TECH_COL, LABEL_COL]].copy()
-res["pred"]    = y_test_pred
-res["correct"] = (res["pred"] == res[LABEL_COL]).astype(int)
-
-# consideriamo SOLO i bot reali
-bots_only = res[res[LABEL_COL] == "bot"]
-
-############################################################################
-# 3)  Accuracy media per categoria (ordinata)
-############################################################################
-acc_by_cat = (
-    bots_only
-    .groupby(TECH_COL)["correct"]
-    .mean()
-    .sort_values()            # crescente → in alto le categorie “più difficili”
-)
-
-print("\n===  Accuracy per categoria di bot (test)  ===")
-print(acc_by_cat.to_string(float_format="%.3f"))
-
-############################################################################
-# 4)  Grafico
-############################################################################
-plt.figure(figsize=(6, 0.6*len(acc_by_cat)+1))
-sns.barplot(
-    y=acc_by_cat.index,
-    x=acc_by_cat.values,
-    palette="crest_r"
-)
-plt.xlim(0, 1)
-plt.xlabel("Accuracy")
-plt.ylabel("Categoria bot")
-plt.title("SVM – accuratezza per famiglia di bot (test set)")
-plt.tight_layout()
-plt.show()
-
-counts = df['class_type'].value_counts()
-print("\nClass types with counts:")
-print(counts)
+'''
